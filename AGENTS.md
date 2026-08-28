@@ -4,13 +4,17 @@
 
 This repository preserves and adapts an Arduino-based electronic speedometer calibrator for classic Porsche applications. The firmware measures the period of the transmission speed-sensor signal and emits a replacement square wave whose frequency is scaled by a calibration factor.
 
-The archived reference design is specifically for a **1986 Porsche 944 Turbo**. `speed.cpp` labels the adaptation more generally as a classic Porsche 944/911 calibrator. Do not assume that 944 wiring, voltage levels, pulse counts, connector pins, or gauge behavior apply unchanged to every 911 or other model; verify them on the target vehicle.
+The archived reference design is specifically for a **1986 Porsche 944 Turbo**. The maintained sketch describes the adaptation more generally as a classic Porsche calibrator. Do not assume that 944 wiring, voltage levels, pulse counts, connector pins, or gauge behavior apply unchanged to every 911 or other model; verify them on the target vehicle.
 
 This is automotive instrumentation code, not a safety-certified product. Bench-test all firmware and interfaces before connecting them to a vehicle.
 
 ## Repository contents
 
-- `speed.cpp` — current Arduino firmware prototype.
+- `firmware/speed/speed.ino` — maintained Nano V3/ATmega328P sketch.
+- `firmware/speed/SpeedEstimator.h` — platform-independent period estimator, missing-event recognition, and fixed-point calibration math.
+- `tests/test_speed_estimator.cpp` — host tests for timing logic.
+- `Makefile` — canonical host-test and Arduino build commands.
+- `README.md` — user-facing configuration, build, pin, and bootloader guidance.
 - `OriginalSpeedometerCalibrator.html` — locally saved 2013 reference article by Tom M'Guinness. Treat it as source/reference material rather than maintained project code.
 - `OriginalSpeedometerCalibrator_files/` — images used by the archived article:
   - `New Schematic.png` — original Arduino Nano/LM2940-10/74C14 circuit.
@@ -31,49 +35,34 @@ The archived article states that:
 - The prototype uses an LM2940-10 regulator to feed an Arduino Nano through `Vin`.
 - `calFactor < 1.0` slows the indicated speed, `1.0` passes the frequency unchanged, and `calFactor > 1.0` increases it.
 
-The firmware listens for falling edges, stores the latest accepted edge-to-edge interval, then toggles the output every `interval / (2 * calFactor)`. This creates an approximately 50% duty-cycle output with frequency `input_frequency * calFactor` when input pulses are uniformly spaced.
+The original firmware listens for falling edges, stores the latest accepted edge-to-edge interval, then toggles the output every `interval / (2 * calFactor)`. This creates an approximately 50% duty-cycle output with frequency `input_frequency * calFactor` when input pulses are uniformly spaced. The maintained redesign below no longer uses that latest-interval polling architecture.
 
 ## Current firmware status
 
-`speed.cpp` is a proof of concept, not production-ready firmware. There is currently:
+The maintained firmware explicitly targets a **16 MHz Arduino Nano V3 compatible clone with an ATmega328P**. It has a reproducible `arduino-cli` build and host-side C++ tests. The USB-C connector and USB/serial bridge do not affect runtime firmware, but uploads may require either the `atmega328old` or `atmega328` Nano bootloader option.
 
-- no Arduino project metadata or checked-in build configuration;
-- no automated test suite or signal simulator;
-- no CI;
-- no documented target board beyond the original classic Arduino Nano/ATmega328P design.
+The redesign addresses startup garbage, first-edge measurement, atomic ISR data transfer, numeric interrupt IDs, floating-point timing, stopped-state output, and polling jitter. Sensor edges are placed in a small ISR-owned queue, foreground code validates and estimates their period, and Timer1 produces the output. Queue overflow deliberately invalidates the estimate and returns the output to idle.
 
-As a standalone `.cpp` file it also lacks `#include <Arduino.h>`. Arduino's implicit include applies to `.ino` preprocessing, not arbitrary standalone C++ in every build system. A future agent should either create a conventional `.ino` sketch or add an explicit Arduino build system such as `arduino-cli` or PlatformIO.
+Known limitations requiring verification:
 
-## Known software issues
+1. D3 rejects intervals at or below 2500 microseconds, limiting accepted input events to below about 400 Hz. Confirm vehicle-speed margin.
+2. Period changes greater than 20% per accepted edge are treated as discontinuities and force reacquisition.
+3. Missing-event recognition supports gaps from one through four normal periods (up to three consecutive missing events).
+4. Startup requires two consistent period measurements (normally three sensor edges) before output starts.
+5. Timer1 is dedicated to output scheduling; Servo and PWM on D9/D10 are incompatible.
+6. D7 idles `LOW`. Confirm this is electrically correct for the protected gauge interface.
+7. D13 mirrors every output transition. This is useful on the bench but may be removed if LED current or ISR overhead matters.
+8. There is no persistent diagnostic interface or nonvolatile calibration UI.
 
-Address these before vehicle use:
+Unsigned subtraction of `micros()` values provides rollover-safe elapsed times; preserve that property.
 
-1. **Invalid startup output:** `interval` begins at zero. During the first second after boot, the output condition can therefore toggle D7 as fast as `loop()` executes.
-2. **Invalid first period:** `previousSpeed` begins at zero, so the first accepted edge measures time since boot rather than time between two sensor edges. Require at least two valid edges before producing output.
-3. **Non-atomic shared read:** `previousSpeed` is a 32-bit value written in the ISR and read directly in `loop()`. Reads are not atomic on an 8-bit AVR. Snapshot all shared multi-byte state in one interrupt-disabled critical section.
-4. **Board-specific interrupt number:** `attachInterrupt(1, ...)` maps to D3 on the classic Uno/Nano but is not portable. Prefer `attachInterrupt(digitalPinToInterrupt(sensorPin), sensorISR, FALLING)`.
-5. **Legacy pull-up configuration:** `pinMode(INPUT)` followed by `digitalWrite(HIGH)` enables the AVR pull-up but is obscure and board-dependent. Prefer `INPUT_PULLUP` when a pull-up is actually required by the conditioned interface.
-6. **No explicit stopped state:** after one second without accepted edges, toggling stops but the output remains at its last level. Define and document the electrically correct idle state.
-7. **Calibration is unchecked:** reject or safely handle zero, negative, unreasonable, NaN, or otherwise invalid calibration values.
-8. **Timing jitter:** floating-point division is repeatedly performed in the hot loop and output edges are generated by polling. Fixed-point arithmetic and a hardware timer would be more deterministic.
-9. **Misleading `volatile` use:** only data shared between ISR and foreground code needs to be volatile. Local timestamps used only in one context should not be shared globals.
-10. **Debounce limit:** `debounce = 2500` microseconds rejects edge intervals at or below approximately 400 Hz. Confirm this leaves margin above the maximum expected vehicle speed and accommodates the real sensor waveform.
+## Missing-pulse behavior
 
-Unsigned subtraction of `micros()` values is the correct general pattern for timer rollover; preserve that property when refactoring.
+`SpeedEstimator` estimates the normal event period and recognizes gaps close to integer multiples of it. A two-period gap is treated as one missing event; gaps up to four periods represent up to three consecutive missing events. Timer1 continues generating the estimated normal cadence through those gaps, so the default behavior reconstructs expected event frequency rather than preserving the observed seven-of-eight average.
 
-## Missing-pulse caveat
+Do not additionally set calibration to `8/7` merely because one event is missing. The calibration ratio is for gauge/tire percentage correction after event reconstruction.
 
-The current algorithm assumes evenly spaced input edges and uses only the latest interval. If one of eight sensor events is consistently absent, one measured interval becomes approximately twice the normal period. The firmware then interprets that interval as a temporary speed reduction and generates a cyclic frequency error. Merely setting `calFactor` to `8.0 / 7.0` does not properly reconstruct the missing event with this latest-period algorithm.
-
-If missing-pulse correction is a goal, first capture and document several revolutions at low and high speeds. Then consider:
-
-- a median or robust estimate of the normal edge period;
-- detecting gaps near integer multiples of that period;
-- reconstructing missing events with a timer;
-- a small digital PLL/phase accumulator; or
-- averaging input frequency over complete sensor revolutions if latency is acceptable.
-
-Specify whether the desired output should represent eight physical positions per revolution, merely correct average speed/odometer rate, or do both. Gauge inertia may hide short-term jitter while the odometer still accumulates incorrectly.
+This behavior is covered by host tests but still requires real waveform captures across low and high speeds. Confirm whether the target should recreate eight physical positions per revolution or only correct average speed/odometer rate. The estimator is frequency-oriented and does not learn the absolute angular location of a missing magnet.
 
 ## Hardware and automotive concerns
 
@@ -97,25 +86,19 @@ For a robust design, review:
 
 The archived LM2940-10 circuit is historical reference, not proof of modern automotive transient compliance.
 
-## Recommended implementation path
+## Recommended next steps
 
-1. Document the exact vehicle/model/year, sensor type, tire size, observed pulse count, voltage levels, and desired correction.
+1. Document the exact vehicle/model/year, sensor type, tire size, observed pulse count, voltage levels, electrical idle state, and desired correction. These remain unknown.
 2. Preserve the archived HTML and its image directory unchanged unless deliberately fixing the archive.
-3. Establish a reproducible Arduino build targeting the selected board.
-4. Separate logic into:
-   - ISR edge capture;
-   - input validation/filtering;
-   - frequency or missing-pulse estimation;
-   - timer-driven output generation;
-   - timeout/fault handling.
-5. Keep ISRs short: capture timestamps/state only; avoid floating point and unnecessary `digitalRead()` calls in the ISR.
-6. Add host-side tests for timestamp sequences, including startup, stop, acceleration, bounce/noise, one missing event, multiple missing events, and `micros()` rollover.
-7. Bench-test with a signal generator and oscilloscope before using a real gauge or vehicle sensor.
-8. Record measured input/output traces and calibration calculations in the repository.
+3. Expand host tests whenever estimator behavior changes.
+4. Add recorded waveform replay tests once captures are available.
+5. Bench-test startup, stop, acceleration, noise, missing events, and maximum frequency with a signal generator and oscilloscope.
+6. Verify both Nano bootloader variants and record the one used by the physical USB-C clone.
+7. Record measured input/output traces and calibration calculations in the repository.
 
 ## Working conventions for future agents
 
-- Read this file, `speed.cpp`, and the relevant section of `OriginalSpeedometerCalibrator.html` before changing behavior.
+- Read this file, `README.md`, `firmware/speed/speed.ino`, `firmware/speed/SpeedEstimator.h`, and the relevant section of `OriginalSpeedometerCalibrator.html` before changing behavior.
 - Use clear units in names or comments, for example `periodUs`, `lastEdgeUs`, and `timeoutUs`.
 - Prefer fixed-width integer types for timing and explicitly document ISR ownership of shared state.
 - Make atomic snapshots of ISR-shared multi-byte values.
@@ -133,7 +116,11 @@ git status --short --branch
 git log --oneline --decorate -5
 
 # Review firmware with line numbers
-nl -ba speed.cpp
+nl -ba firmware/speed/speed.ino
+
+# Run host tests and compile for the Nano clone
+make test
+make arduino
 
 # Locate relevant statements in the archived page
 rg -n -i 'sensor|pulse|schmitt|LM2940|calFactor|firmware' \
@@ -143,4 +130,4 @@ rg -n -i 'sensor|pulse|schmitt|LM2940|calFactor|firmware' \
 find . -maxdepth 3 -type f -not -path './.git/*' -print | sort
 ```
 
-There is not yet a canonical build or test command. Add those commands here as soon as a toolchain is introduced.
+Canonical validation is `make test && make arduino`. The default Arduino FQBN is `arduino:avr:nano:cpu=atmega328old`; override `NANO_FQBN` for a clone with the newer Nano bootloader.
