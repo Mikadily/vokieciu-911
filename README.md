@@ -1,77 +1,64 @@
-# Classic Porsche speedometer calibrator
+# One-missing-magnet speedometer repair
 
-Arduino firmware that conditions the timing of a classic Porsche electronic speedometer signal. The maintained implementation targets a **16 MHz Arduino Nano V3 / ATmega328P-compatible clone**. The repository also preserves the original 2013 Porsche 944 reference article and images.
+Minimal Arduino firmware for the waveform shown in `1-of-8-magnets-missing.png`. It targets a **16 MHz Arduino Nano V3 / ATmega328P-compatible clone**.
 
-> **Not vehicle-ready by compilation alone.** Verify all voltages and pulse behavior on the target vehicle, use protected automotive input/output interfaces, and bench-test with a signal generator and oscilloscope before installation.
+With seven observed pulses from eight expected magnet positions, each revolution has six normal edge intervals of approximately `T` and one interval of approximately `2T` across the missing position. The sketch learns `T` and emits a continuous 50% duty-cycle signal with period `T`, thereby filling the missing event.
 
-## Firmware behavior
+> Compilation does not make the circuit vehicle-safe. Use a conditioned logic-level input and a protected output interface, then verify the result on a bench before installation.
 
-The sketch:
+## Deliberately limited behavior
 
-- timestamps falling sensor edges on D3;
-- rejects edges separated by 2.5 ms or less;
-- requires two consistent measured periods before enabling output;
-- estimates the normal event period with a fixed-point IIR filter;
-- recognizes gaps containing up to three missing sensor events;
-- generates a calibrated 50% duty-cycle output on D7 using Timer1;
-- returns D7 and the built-in LED to `LOW` after signal timeout or queue overflow;
-- handles `micros()` rollover using unsigned subtraction.
+The implementation only handles:
 
-The default frequency ratio is `91/100`, matching the original `calFactor = 0.91`. Change `kCalibrationNumerator` and `kCalibrationDenominator` in `firmware/speed/speed.ino` only after measuring the required correction. Missing-event reconstruction already restores the normal event cadence; do not automatically multiply the calibration by `8/7` for one missing magnet.
+- normal gaps close to `T`;
+- one missing magnet represented by a gap close to `2T`;
+- input edges more than 2.5 ms apart;
+- loss of signal, with a one-second timeout.
 
-## Pin and timer use
+It does not support percentage calibration, multiple consecutive missing magnets, arbitrary pulse multiplication, serial configuration, or Timer1-specific hardware. Keeping those features out makes the failure modes easier to understand.
 
-| Resource | Use |
+Startup uses two measured gaps. If either startup gap crosses the missing position, the shorter gap is recognized as `T`. Output then free-runs at `T`; a `2T` input gap is ignored, so output pulses continue through the missing position. Normal gaps update `T` through a small fixed-point filter.
+
+## Pins
+
+| Pin | Purpose |
 | --- | --- |
-| D3 / INT1 | Conditioned sensor input, falling edge |
-| D7 | Calibrated speedometer output |
-| D13 / `LED_BUILTIN` | Mirrors output for bench observation |
-| Timer1 | Deterministic output scheduling |
+| D3 | Falling-edge input from external Schmitt trigger |
+| D7 | Repaired 50% duty-cycle output |
 
-Timer1 ownership means libraries/features using Timer1, including Servo and PWM on D9/D10, are incompatible with this sketch.
-
-`INPUT_PULLUP` is enabled on D3, but the expected input remains the clean logic-level output of an external Schmitt-trigger stage. D7 must feed an electrically appropriate protected output stage; it is not proof that direct connection to a gauge is safe.
+D3 uses `INPUT_PULLUP`. D7 idles `LOW` after startup, timeout, or an unrecognized period change. Verify that these electrical choices match the real conditioning and gauge interfaces.
 
 ## Build and test
 
-Requirements:
-
-- `g++` with C++11 support
-- `arduino-cli`
-- Arduino AVR core (`arduino:avr`)
+Requirements are `g++`, `arduino-cli`, and the `arduino:avr` core.
 
 ```sh
 make test
 make arduino
 ```
 
-The default board identifier uses the bootloader commonly found on older Nano clones:
+The default build uses the old Nano bootloader commonly found on clones:
 
 ```text
 arduino:avr:nano:cpu=atmega328old
 ```
 
-The bootloader selection changes upload protocol, not the generated ATmega328P application logic. If this USB-C clone uses the newer Nano bootloader, build/upload with:
+For a board with the newer bootloader:
 
 ```sh
 make arduino NANO_FQBN=arduino:avr:nano:cpu=atmega328
-arduino-cli upload -p /dev/ttyUSB0 \
-  --fqbn arduino:avr:nano:cpu=atmega328 firmware/speed
 ```
 
-Use the actual serial device and bootloader variant for the board. USB-C does not itself identify which bootloader is installed.
+USB-C does not identify the installed bootloader; it only describes the connector.
 
-## Missing information to verify
+## What must still be measured
 
-Before vehicle installation, record:
+Before installing it, verify:
 
-- exact Porsche model and year;
-- sensor type and expected events per wheel/transmission revolution;
-- input waveform, idle/active voltage, polarity, and maximum frequency;
-- gauge input voltage, pull-up, and current requirements;
-- desired behavior for the captured one-of-eight missing event;
-- calibrated ratio derived from GPS or a traceable speed reference;
-- correct electrical idle output level;
-- behavior when the calibrator is unpowered.
-
-See `AGENTS.md` for implementation details, known limitations, and automotive hardware cautions.
+- the exact vehicle, sensor, and expected eight-event pattern;
+- that the conditioned falling-edge gaps really consist of normal `T` gaps and one recurring `2T` gap;
+- minimum and maximum `T` across the vehicle speed range;
+- D3 voltage levels and polarity;
+- D7 interface voltage, current, and correct idle level;
+- behavior when the Arduino is unpowered;
+- output timing with a signal generator and oscilloscope.

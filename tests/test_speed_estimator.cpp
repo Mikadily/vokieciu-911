@@ -1,6 +1,5 @@
 #include <cstdlib>
 #include <iostream>
-#include <limits>
 
 #include "SpeedEstimator.h"
 
@@ -19,146 +18,96 @@ void check(const bool condition, const char *expression, const int line)
 
 #define CHECK(expression) check((expression), #expression, __LINE__)
 
-using speedometer::EdgeResult;
+using speedometer::GapResult;
 using speedometer::SpeedEstimator;
 
-void testStartupRequiresConsistentPeriods()
+void testTwoNormalGapsAcquirePeriod()
 {
     SpeedEstimator estimator;
-    CHECK(estimator.addEdge(1000) == EdgeResult::FirstEdge);
+    CHECK(estimator.addGap(10000) == GapResult::Candidate);
     CHECK(!estimator.ready());
-    CHECK(estimator.addEdge(11000) == EdgeResult::CandidatePeriod);
-    CHECK(!estimator.ready());
-    CHECK(estimator.addEdge(21000) == EdgeResult::PeriodAccepted);
+    CHECK(estimator.addGap(10000) == GapResult::Normal);
     CHECK(estimator.ready());
     CHECK(estimator.periodUs() == 10000);
 }
 
-void testBounceDoesNotMoveAcceptedEdge()
+void testMissingGapDuringStartup()
 {
     SpeedEstimator estimator;
-    CHECK(estimator.addEdge(1000) == EdgeResult::FirstEdge);
-    CHECK(estimator.addEdge(2000) == EdgeResult::BounceRejected);
-    CHECK(estimator.addEdge(11000) == EdgeResult::CandidatePeriod);
-    CHECK(estimator.addEdge(21000) == EdgeResult::PeriodAccepted);
-    CHECK(estimator.periodUs() == 10000);
-}
-
-void testSingleMissingPulseIsNormalized()
-{
-    SpeedEstimator estimator;
-    estimator.addEdge(1000);
-    estimator.addEdge(11000);
-    estimator.addEdge(21000);
-
-    CHECK(estimator.addEdge(41000) == EdgeResult::MissingPulseGap);
+    CHECK(estimator.addGap(20000) == GapResult::Candidate);
+    CHECK(estimator.addGap(10000) == GapResult::OneMissing);
     CHECK(estimator.ready());
     CHECK(estimator.periodUs() == 10000);
-    CHECK(estimator.missingPulseCount() == 1);
-    CHECK(estimator.addEdge(51000) == EdgeResult::PeriodAccepted);
-    CHECK(estimator.periodUs() == 10000);
-}
-
-void testMultipleMissingPulsesAreNormalized()
-{
-    SpeedEstimator estimator;
-    estimator.addEdge(1000);
-    estimator.addEdge(11000);
-    estimator.addEdge(21000);
-
-    CHECK(estimator.addEdge(51000) == EdgeResult::MissingPulseGap);
-    CHECK(estimator.periodUs() == 10000);
-    CHECK(estimator.missingPulseCount() == 2);
-}
-
-void testMissingPulseDuringInitialization()
-{
-    SpeedEstimator estimator;
-    estimator.addEdge(1000);
-    CHECK(estimator.addEdge(21000) == EdgeResult::CandidatePeriod);
-    CHECK(estimator.addEdge(31000) == EdgeResult::MissingPulseGap);
-    CHECK(estimator.ready());
-    CHECK(estimator.periodUs() == 10000);
-    CHECK(estimator.missingPulseCount() == 1);
-}
-
-void testGradualAccelerationIsTracked()
-{
-    SpeedEstimator estimator;
-    estimator.addEdge(1000);
-    estimator.addEdge(11000);
-    estimator.addEdge(21000);
-
-    CHECK(estimator.addEdge(30500) == EdgeResult::PeriodAccepted);
-    CHECK(estimator.addEdge(39500) == EdgeResult::PeriodAccepted);
-    CHECK(estimator.ready());
-    CHECK(estimator.periodUs() < 10000);
-    CHECK(estimator.periodUs() > 9000);
-}
-
-void testDiscontinuityRequiresReacquisition()
-{
-    SpeedEstimator estimator;
-    estimator.addEdge(1000);
-    estimator.addEdge(11000);
-    estimator.addEdge(21000);
-
-    CHECK(estimator.addEdge(36000) == EdgeResult::Discontinuity);
-    CHECK(!estimator.ready());
-    CHECK(estimator.addEdge(51000) == EdgeResult::PeriodAccepted);
-    CHECK(estimator.ready());
-    CHECK(estimator.periodUs() == 15000);
-}
-
-void testMicrosRollover()
-{
-    SpeedEstimator estimator;
-    const uint32_t first = std::numeric_limits<uint32_t>::max() - 4999U;
-    CHECK(estimator.addEdge(first) == EdgeResult::FirstEdge);
-    CHECK(estimator.addEdge(5000) == EdgeResult::CandidatePeriod);
-    CHECK(estimator.addEdge(15000) == EdgeResult::PeriodAccepted);
-    CHECK(estimator.periodUs() == 10000);
-}
-
-void testTimeout()
-{
-    SpeedEstimator estimator;
-    estimator.addEdge(1000);
-    CHECK(!estimator.timedOut(1000000));
-    CHECK(estimator.timedOut(1001000));
 
     estimator.reset();
-    estimator.addEdge(1000);
-    estimator.addEdge(601000);
-    estimator.addEdge(1201000);
+    CHECK(estimator.addGap(10000) == GapResult::Candidate);
+    CHECK(estimator.addGap(20000) == GapResult::OneMissing);
     CHECK(estimator.ready());
-    CHECK(!estimator.timedOut(4000000));
-    CHECK(estimator.timedOut(4201000));
+    CHECK(estimator.periodUs() == 10000);
 }
 
-void testCalibrationMath()
+void testRecurringOneOfEightMissingPattern()
 {
-    CHECK(speedometer::calibratedHalfPeriodUs(10000, 1, 1) == 5000);
-    CHECK(speedometer::calibratedHalfPeriodUs(10000, 91, 100) == 5495);
-    CHECK(speedometer::calibratedHalfPeriodUs(10000, 8, 7) == 4375);
-    CHECK(speedometer::calibratedHalfPeriodUs(0, 1, 1) == 0);
-    CHECK(speedometer::calibratedHalfPeriodUs(10000, 0, 1) == 0);
+    SpeedEstimator estimator;
+    const uint32_t gaps[] = {
+        10000, 10000, 10000, 10000, 10000, 10000, 20000,
+        10000, 10000, 10000, 10000, 10000, 10000, 20000
+    };
+
+    unsigned missingGaps = 0;
+    for (const uint32_t gapUs : gaps) {
+        if (estimator.addGap(gapUs) == GapResult::OneMissing) {
+            ++missingGaps;
+        }
+    }
+
+    CHECK(estimator.ready());
+    CHECK(estimator.periodUs() == 10000);
+    CHECK(missingGaps == 2);
+}
+
+void testShortNoiseIsRejected()
+{
+    SpeedEstimator estimator;
+    CHECK(estimator.addGap(1000) == GapResult::Rejected);
+    CHECK(!estimator.ready());
+    estimator.addGap(10000);
+    estimator.addGap(10000);
+    CHECK(estimator.ready());
+}
+
+void testSmallSpeedChangeIsFiltered()
+{
+    SpeedEstimator estimator;
+    estimator.addGap(10000);
+    estimator.addGap(10000);
+    CHECK(estimator.addGap(9600) == GapResult::Normal);
+    CHECK(estimator.periodUs() == 9900);
+}
+
+void testUnexpectedGapForcesReacquisition()
+{
+    SpeedEstimator estimator;
+    estimator.addGap(10000);
+    estimator.addGap(10000);
+
+    CHECK(estimator.addGap(15000) == GapResult::Rejected);
+    CHECK(!estimator.ready());
+    CHECK(estimator.addGap(15000) == GapResult::Normal);
+    CHECK(estimator.ready());
+    CHECK(estimator.periodUs() == 15000);
 }
 
 }  // namespace
 
 int main()
 {
-    testStartupRequiresConsistentPeriods();
-    testBounceDoesNotMoveAcceptedEdge();
-    testSingleMissingPulseIsNormalized();
-    testMultipleMissingPulsesAreNormalized();
-    testMissingPulseDuringInitialization();
-    testGradualAccelerationIsTracked();
-    testDiscontinuityRequiresReacquisition();
-    testMicrosRollover();
-    testTimeout();
-    testCalibrationMath();
+    testTwoNormalGapsAcquirePeriod();
+    testMissingGapDuringStartup();
+    testRecurringOneOfEightMissingPattern();
+    testShortNoiseIsRejected();
+    testSmallSpeedChangeIsFiltered();
+    testUnexpectedGapForcesReacquisition();
 
     if (gFailures != 0) {
         std::cerr << gFailures << " test(s) failed\n";
