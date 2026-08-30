@@ -38,7 +38,7 @@ void stopOutput()
 
 void startOrUpdateOutput(const uint32_t periodUs)
 {
-    const uint32_t halfPeriodUs = periodUs / 2U;
+    const uint32_t halfPeriodUs = periodUs;
     if (halfPeriodUs == 0) {
         stopOutput();
         return;
