@@ -38,7 +38,7 @@ void stopOutput()
 
 void startOrUpdateOutput(const uint32_t periodUs)
 {
-    const uint32_t halfPeriodUs = periodUs;
+    const uint32_t halfPeriodUs = periodUs / 2U;
     if (halfPeriodUs == 0) {
         stopOutput();
         return;
@@ -84,6 +84,10 @@ void resetAfterTimeout()
 
 void onSensorFalling()
 {
+    // Guard: some clones fire on both edges despite FALLING mode.
+    // After a true falling edge the pin reads LOW; skip if HIGH.
+    if (PIND & _BV(PIND3)) return;
+
     const uint32_t nowUs = micros();
     if (!gHaveInputEdge) {
         gLastInputEdgeUs = nowUs;
