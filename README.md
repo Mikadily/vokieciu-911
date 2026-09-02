@@ -2,7 +2,7 @@
 
 Minimal Arduino firmware for the waveform shown in `1-of-8-magnets-missing.png`. It targets a **16 MHz Arduino Nano V3 / ATmega328P-compatible clone**.
 
-With seven observed pulses from eight expected magnet positions, each revolution has six normal edge intervals of approximately `T` and one interval of approximately `2T` across the missing position. The sketch learns `T` and emits a continuous 50% duty-cycle signal with period `T`, thereby filling the missing event.
+With seven observed pulses from eight expected magnet positions, each revolution has six normal edge intervals of approximately `T` and one interval of approximately `2T` across the missing position. The sketch learns `T`, repairs the missing-event cadence, and emits a continuous 50% duty-cycle signal with period `2T`. The output frequency is therefore one half of the repaired sensor frequency.
 
 > Compilation does not make the circuit vehicle-safe. Use a conditioned logic-level input and a protected output interface, then verify the result on a bench before installation.
 
@@ -17,14 +17,14 @@ The implementation only handles:
 
 It does not support percentage calibration, multiple consecutive missing magnets, arbitrary pulse multiplication, serial configuration, or Timer1-specific hardware. Keeping those features out makes the failure modes easier to understand.
 
-Startup uses two measured gaps. If either startup gap crosses the missing position, the shorter gap is recognized as `T`. Output then free-runs at `T`; a `2T` input gap is ignored, so output pulses continue through the missing position. Normal gaps update `T` through a small fixed-point filter.
+Startup uses two measured gaps. If either startup gap crosses the missing position, the shorter gap is recognized as `T`. Output then free-runs with period `2T`; a `2T` input gap is ignored, so output pulses continue through the missing position. Normal gaps update `T` through a small fixed-point filter.
 
 ## Pins
 
 | Pin | Purpose |
 | --- | --- |
 | D3 | Falling-edge input from external Schmitt trigger |
-| D7 | Repaired 50% duty-cycle output |
+| D7 | Repaired 50% duty-cycle output at half frequency |
 
 D3 uses `INPUT_PULLUP`. D7 idles `LOW` after startup, timeout, or an unrecognized period change. Verify that these electrical choices match the real conditioning and gauge interfaces.
 

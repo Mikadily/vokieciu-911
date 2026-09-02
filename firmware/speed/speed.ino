@@ -1,4 +1,5 @@
-// Repair a speedometer signal with one missing magnet out of eight.
+// Repair a speedometer signal with one missing magnet out of eight, then
+// divide the repaired output frequency by two.
 // Target: 16 MHz Arduino Nano V3 / ATmega328P compatible clone.
 //
 // D3 must receive a clean logic signal from the external Schmitt trigger.
@@ -36,15 +37,16 @@ void stopOutput()
     digitalWrite(kOutputPin, kIdleLevel);
 }
 
-void startOrUpdateOutput(const uint32_t periodUs)
+void startOrUpdateOutput(const uint32_t inputPeriodUs)
 {
-    const uint32_t halfPeriodUs = periodUs / 2U;
-    if (halfPeriodUs == 0) {
+    // A square wave toggled every learned input period has a full period of
+    // 2T, so its frequency is one half of the repaired sensor frequency.
+    if (inputPeriodUs == 0) {
         stopOutput();
         return;
     }
 
-    gHalfPeriodUs = halfPeriodUs;
+    gHalfPeriodUs = inputPeriodUs;
     if (!gOutputRunning) {
         gOutputHigh = false;
         digitalWrite(kOutputPin, kIdleLevel);
