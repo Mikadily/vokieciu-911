@@ -133,6 +133,97 @@ private:
     }
 };
 
+// Limits how quickly the generated output frequency can follow the estimator.
+// The target remains input-derived; only its rate of change is constrained.
+class OutputFrequencyLimiter {
+public:
+    static constexpr uint16_t kMaxChangePercentPerSecond = 100U;
+
+    OutputFrequencyLimiter() { reset(); }
+
+    void reset()
+    {
+        initialized_ = false;
+        frequencyMilliHz_ = 0;
+        lastUpdateUs_ = 0;
+    }
+
+    uint32_t update(const uint32_t targetPeriodUs, const uint32_t nowUs)
+    {
+        if (targetPeriodUs == 0) {
+            return 0;
+        }
+
+        const uint32_t targetFrequencyMilliHz = periodToFrequency(targetPeriodUs);
+        if (!initialized_) {
+            initialized_ = true;
+            frequencyMilliHz_ = targetFrequencyMilliHz;
+            lastUpdateUs_ = nowUs;
+            return targetPeriodUs;
+        }
+
+        const uint32_t elapsedUs = nowUs - lastUpdateUs_;
+        lastUpdateUs_ = nowUs;
+
+        if (targetFrequencyMilliHz == frequencyMilliHz_) {
+            return frequencyToPeriod(frequencyMilliHz_);
+        }
+
+        uint32_t maximumChangeMilliHz = static_cast<uint32_t>(
+            static_cast<uint64_t>(frequencyMilliHz_) *
+            kMaxChangePercentPerSecond * elapsedUs / 100000000ULL);
+        if (maximumChangeMilliHz == 0 && elapsedUs != 0) {
+            // One milliHertz is the smallest representable adjustment.
+            maximumChangeMilliHz = 1;
+        }
+
+        if (targetFrequencyMilliHz > frequencyMilliHz_) {
+            const uint32_t requestedChange =
+                targetFrequencyMilliHz - frequencyMilliHz_;
+            frequencyMilliHz_ += requestedChange < maximumChangeMilliHz
+                                     ? requestedChange
+                                     : maximumChangeMilliHz;
+        } else {
+            const uint32_t requestedChange =
+                frequencyMilliHz_ - targetFrequencyMilliHz;
+            frequencyMilliHz_ -= requestedChange < maximumChangeMilliHz
+                                     ? requestedChange
+                                     : maximumChangeMilliHz;
+        }
+
+        return frequencyToPeriod(frequencyMilliHz_);
+    }
+
+    // An untrusted gap must not accumulate a large allowance for the next
+    // update, but the last valid output frequency is retained for reacquisition.
+    void hold(const uint32_t nowUs)
+    {
+        if (initialized_) {
+            lastUpdateUs_ = nowUs;
+        }
+    }
+
+private:
+    static constexpr uint64_t kMicrosecondsMilliHz = 1000000000ULL;
+
+    bool initialized_;
+    uint32_t frequencyMilliHz_;
+    uint32_t lastUpdateUs_;
+
+    static uint32_t periodToFrequency(const uint32_t periodUs)
+    {
+        return static_cast<uint32_t>(
+            (kMicrosecondsMilliHz + periodUs / 2U) / periodUs);
+    }
+
+    static uint32_t frequencyToPeriod(const uint32_t frequencyMilliHz)
+    {
+        return static_cast<uint32_t>(
+            (kMicrosecondsMilliHz + frequencyMilliHz / 2U) /
+            frequencyMilliHz);
+    }
+};
+
 }  // namespace speedometer
 
 #endif  // SPEED_ESTIMATOR_H

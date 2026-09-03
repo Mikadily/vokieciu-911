@@ -23,6 +23,7 @@ volatile uint32_t gLastInputEdgeUs = 0;
 volatile uint32_t gLatestGapUs = 0;
 
 speedometer::SpeedEstimator gEstimator;
+speedometer::OutputFrequencyLimiter gOutputFrequencyLimiter;
 
 bool gOutputRunning = false;
 bool gOutputHigh = false;
@@ -36,9 +37,12 @@ void stopOutput()
     digitalWrite(kOutputPin, kIdleLevel);
 }
 
-void startOrUpdateOutput(const uint32_t periodUs)
+void startOrUpdateOutput(const uint32_t targetPeriodUs,
+                         const uint32_t nowUs)
 {
-    const uint32_t halfPeriodUs = periodUs / 2U;
+    const uint32_t limitedPeriodUs =
+        gOutputFrequencyLimiter.update(targetPeriodUs, nowUs);
+    const uint32_t halfPeriodUs = limitedPeriodUs / 2U;
     if (halfPeriodUs == 0) {
         stopOutput();
         return;
@@ -79,6 +83,7 @@ void resetAfterTimeout()
         gNewGap = false;
     }
     gEstimator.reset();
+    gOutputFrequencyLimiter.reset();
     stopOutput();
 }
 
@@ -134,16 +139,20 @@ void loop()
         }
     }
 
+    const uint32_t nowUs = micros();
+
     if (haveNewGap) {
         gEstimator.addGap(gapUs);
         if (gEstimator.ready()) {
-            startOrUpdateOutput(gEstimator.periodUs());
+            startOrUpdateOutput(gEstimator.periodUs(), nowUs);
         } else {
+            // Keep the previous trusted frequency for reacquisition, but do
+            // not let rejected time create permission for a large jump.
+            gOutputFrequencyLimiter.hold(nowUs);
             stopOutput();
         }
     }
 
-    const uint32_t nowUs = micros();
     if (haveInputEdge &&
         static_cast<uint32_t>(nowUs - lastInputEdgeUs) >= kSignalTimeoutUs) {
         resetAfterTimeout();

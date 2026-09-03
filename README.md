@@ -19,6 +19,8 @@ It does not support percentage calibration, multiple consecutive missing magnets
 
 Startup uses two measured gaps. If either startup gap crosses the missing position, the shorter gap is recognized as `T`. Output then free-runs at `T`; a `2T` input gap is ignored, so output pulses continue through the missing position. Normal gaps update `T` through a small fixed-point filter.
 
+A second, independent limiter prevents the generated frequency from changing instantaneously even if the estimator makes a large change after reacquisition. D7 may move toward the input-derived target by at most 100% of its current frequency per second. This limit is based on elapsed microseconds, so it does not become weaker at higher pulse rates. An unrecognized gap still stops D7, but reacquisition resumes near the last trusted output frequency and approaches the new target gradually. A one-second signal timeout clears both the estimate and the retained output frequency, allowing a fresh startup.
+
 ## Pins
 
 | Pin | Purpose |
@@ -61,4 +63,5 @@ Before installing it, verify:
 - D3 voltage levels and polarity;
 - D7 interface voltage, current, and correct idle level;
 - behavior when the Arduino is unpowered;
-- output timing with a signal generator and oscilloscope.
+- output timing with a signal generator and oscilloscope;
+- that the 100%/second output-frequency slew limit follows the fastest real wheel acceleration without unacceptable gauge lag.
