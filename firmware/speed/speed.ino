@@ -1,7 +1,7 @@
 // Repair a speedometer signal with one missing magnet out of eight.
 // Target: 16 MHz Arduino Nano V3 / ATmega328P compatible clone.
 //
-// D3 must receive a clean logic signal from the external Schmitt trigger.
+// D3 must receive clean active-high pulses from the external Schmitt trigger.
 // D7 must drive the speedometer through an electrically suitable interface.
 
 #include <Arduino.h>
@@ -82,11 +82,11 @@ void resetAfterTimeout()
     stopOutput();
 }
 
-void onSensorFalling()
+void onSensorRising()
 {
-    // Guard: some clones fire on both edges despite FALLING mode.
-    // After a true falling edge the pin reads LOW; skip if HIGH.
-    if (PIND & _BV(PIND3)) return;
+    // Guard: accept only the rising edges that start the observed high pulses.
+    // The missing eighth pulse therefore appears as one 2T rising-edge gap.
+    if (!(PIND & _BV(PIND3))) return;
 
     const uint32_t nowUs = micros();
     if (!gHaveInputEdge) {
@@ -110,9 +110,10 @@ void onSensorFalling()
 void setup()
 {
     pinMode(kOutputPin, OUTPUT);
-    pinMode(kSensorPin, INPUT_PULLUP);
+    // The conditioned waveform is actively driven and idles LOW.
+    pinMode(kSensorPin, INPUT);
     digitalWrite(kOutputPin, kIdleLevel);
-    attachInterrupt(digitalPinToInterrupt(kSensorPin), onSensorFalling, FALLING);
+    attachInterrupt(digitalPinToInterrupt(kSensorPin), onSensorRising, RISING);
 }
 
 void loop()

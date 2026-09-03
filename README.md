@@ -2,7 +2,7 @@
 
 Minimal Arduino firmware for the waveform shown in `1-of-8-magnets-missing.png`. It targets a **16 MHz Arduino Nano V3 / ATmega328P-compatible clone**.
 
-With seven observed pulses from eight expected magnet positions, each revolution has six normal edge intervals of approximately `T` and one interval of approximately `2T` across the missing position. The sketch learns `T` and emits a continuous 50% duty-cycle signal with period `T`, thereby filling the missing event.
+The measured input is an active-high waveform with one high pulse absent at every eighth expected magnet position. Its rising edges produce six normal intervals of approximately `T` and one interval of approximately `2T` per revolution. The sketch learns `T` and emits a continuous active-high 50% duty-cycle signal with period `T`, thereby filling the missing event.
 
 > Compilation does not make the circuit vehicle-safe. Use a conditioned logic-level input and a protected output interface, then verify the result on a bench before installation.
 
@@ -23,10 +23,10 @@ Startup uses two measured gaps. If either startup gap crosses the missing positi
 
 | Pin | Purpose |
 | --- | --- |
-| D3 | Falling-edge input from external Schmitt trigger |
-| D7 | Repaired 50% duty-cycle output |
+| D3 | Rising-edge input for active-high pulses from an external Schmitt trigger |
+| D7 | Repaired active-high 50% duty-cycle output |
 
-D3 uses `INPUT_PULLUP`. D7 idles `LOW` after startup, timeout, or an unrecognized period change. Verify that these electrical choices match the real conditioning and gauge interfaces.
+The conditioned D3 waveform must be actively driven and idle `LOW`; the sketch therefore uses `INPUT` without the internal pull-up. D7 also idles `LOW` after startup, timeout, or an unrecognized period change. Verify that these electrical choices match the real conditioning and gauge interfaces.
 
 ## Build and test
 
@@ -56,7 +56,7 @@ USB-C does not identify the installed bootloader; it only describes the connecto
 Before installing it, verify:
 
 - the exact vehicle, sensor, and expected eight-event pattern;
-- that the conditioned falling-edge gaps really consist of normal `T` gaps and one recurring `2T` gap;
+- that the conditioned rising-edge gaps really consist of normal `T` gaps and one recurring `2T` gap;
 - minimum and maximum `T` across the vehicle speed range;
 - D3 voltage levels and polarity;
 - D7 interface voltage, current, and correct idle level;
